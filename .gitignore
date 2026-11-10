@@ -35,3 +35,21 @@ log/
 Thumbs.db
 .vscode/
 .idea/
+
+# --- MPS support additions (2026-11-10) ---
+# Vendored model snapshot: track source/config only; never commit multi-GB weights or caches
+local_model/**/*.safetensors
+local_model/.cache/
+local_model/__pycache__/
+local_model/assets/
+local_model/wheel/
+
+# HuggingFace / uv tool caches
+.hf-cache/
+.uv-cache/
+
+# Local runtime outputs
+out/
+
+# Stray uv redirect artifact
+=2.13.0

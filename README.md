@@ -74,23 +74,51 @@
 
 > Unlimited OCR 2 supports **Transformers** (native, for quick tests) and **SGLang** (recommended for serving).
 
-### Transformers
+### Transformers (cross-platform: CUDA / Apple MPS / CPU)
 
-Tested with Python 3.10, `torch==2.13.0`, `transformers==4.52.1`, `huggingface-hub==0.36.0`, `tokenizers==0.21.4`, on an NVIDIA A800-80GB:
+Tested with Python 3.10, `torch==2.13.0`, `transformers==4.52.1`, `huggingface-hub==0.36.0`, `tokenizers==0.21.4`. The upstream example hardcodes CUDA placement (`.cuda()`) and only runs on NVIDIA GPUs. We provide a **device-agnostic** loader that auto-selects the best backend:
+
+* NVIDIA CUDA → `cuda`
+* Apple Silicon (M1/M2/M3/**M4**) → `mps`
+* everything else → `cpu`
+
+#### Quick start with the provided helper (recommended)
+
 ```shell
-pip install torch==2.13.0 torchvision pillow transformers==4.52.1 huggingface-hub==0.36.0 \
-  tokenizers==0.21.4 addict==2.4.0 einops==0.8.2 easydict==1.13
+# 1) Create the uv-managed virtualenv (Python 3.10)
+uv venv --python 3.10
+source .venv/bin/activate
+
+# 2) Install the cross-platform dependencies (uv resolves torch for your platform)
+uv pip install torch torchvision pillow "transformers==4.52.1" "huggingface-hub==0.36.0" \
+  "tokenizers==0.21.4" addict==2.4.0 einops==0.8.2 easydict==1.13
+
+# 3) Run inference (device is auto-detected; pass --device mps|cuda|cpu to override)
+python utils/infer_transformers.py --image your_doc/page_1.jpg --out output
+python utils/infer_transformers.py --images your_doc/page_1.jpg your_doc/page_2.jpg --out output
 ```
 
-Load the model once:
+The helper (`utils/infer_transformers.py` + `utils/device.py`) never calls `.cuda()`; it
+places the model on the device returned by `detect_device()`, defaulting to `bfloat16` on
+accelerators and `float32` on CPU.
+
+#### Loading the model yourself (device-agnostic)
+
 ```python
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "utils"))
+from device import detect_device, resolve_torch_dtype
+
 import torch
 from transformers import AutoModel, AutoTokenizer
 
 model_name = "baidu/Unlimited-OCR-2"
+device = detect_device(None)                 # cuda > mps > cpu
+dtype = resolve_torch_dtype(device)          # bfloat16 on accelerators, float32 on cpu
+
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 model = AutoModel.from_pretrained(model_name, trust_remote_code=True, use_safetensors=True,
-                                  torch_dtype=torch.bfloat16).eval().cuda()
+                                  torch_dtype=dtype).eval().to(device)
 ```
 
 **Multi-page inference** (`infer_multi`). All pages of a document are parsed in one request, so the model can use cross-page context. Pass the page images in page order:
@@ -107,6 +135,20 @@ The prompt is built automatically as `"<PAGE><image>" * num_pages + "Multi page 
 text = model.infer(tokenizer, image_file="your_doc/page_1.jpg",
                    output_path="output/single", save_results=True)
 ```
+
+> **Note on Apple Silicon (MPS):** PyTorch's MPS backend covers most operators used by the
+> model; a few custom kernels may transparently fall back to CPU. This is expected and does
+> not require code changes. If you hit an MPS-specific op error, force CPU with
+> `python utils/infer_transformers.py --device cpu ...`.
+
+> **Vendored model (`local_model/`):** `infer_mps.py` defaults to a vendored offline copy in
+> `local_model/` (config + code + weights). The model ships CUDA-only `triton` attention
+> kernels, but every triton call site is `is_cuda`-gated and falls back to a pure-Torch eager
+> path on MPS/CPU — so **no kernel rewrite is needed**. The only required model-source change
+> is removing the hardcoded `.cuda()` in `local_model/modeling_unlimitedocr.py` (visual-feature
+> scatter). The multi-GB `*.safetensors` weights are git-ignored; if you re-download the model
+> with `huggingface-cli download baidu/Unlimited-OCR-2 --local-dir local_model`, re-apply that
+> `.cuda()` removal.
 
 
 ### SGLang
